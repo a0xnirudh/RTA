@@ -460,9 +460,6 @@ def main():
     recon = Recon()
     scan = Scan()
 
-    if args.firebase:
-        recon.firebase_scan()
-
     for url in args.url:
         recon.zonetransfer(url)
         recon.spfcheck(url)
@@ -485,6 +482,9 @@ def main():
             filename = "Nessus_report_" + str(datetime.now()).split('.')[0]
             scan.nessus_scan(recon.subdomains, filename)
 
+    if args.firebase:
+        recon.firebase_scan()
+        
     return
 
 
