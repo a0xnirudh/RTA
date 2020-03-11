@@ -48,7 +48,7 @@ def main():
         install.os_dependencies_linux()
     
     install.sublister()
-    install.wpscan()
+    # install.wpscan()
     print("\033[92m" + "\nPlease modify the config file with the required values before running RTA !")
 
     return

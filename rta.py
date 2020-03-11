@@ -2,9 +2,13 @@ import os
 import sys
 import json
 import time
+import yaml
 import socket
 import requests
 import argparse
+
+import hashlib
+import dns.resolver
 
 from datetime import datetime
 from pymongo import MongoClient
@@ -57,6 +61,11 @@ class Recon(object):
 
         # Slack push notification message
         self.message = ""
+
+        # Parsing config
+        self.path = os.path.dirname(os.path.abspath(__file__))
+        with open(self.path + "/config", "r") as ymlfile:
+            self.config = yaml.load(ymlfile, Loader=yaml.FullLoader)
         return
 
     ############################ Finding Subdomains ############################
@@ -73,6 +82,7 @@ class Recon(object):
         
         if zoneresult["enabled"]:
             print(self.R + "[+] Zone Transfer is enabled")
+            self.slack.notify_slack("[+] Zone Transfer is enabled for " + target)
             self.subdomains |= set([str(x) for x in zoneresult["list"]])
         else:
             print(self.G + "[i] Zone Transfer is not enabled\n")
@@ -233,7 +243,7 @@ class Recon(object):
         return
 
 
-    ############################ SPF Records ############################
+    ############################ DNS Records ############################
 
     def spfcheck(self, target):
         """
@@ -243,9 +253,47 @@ class Recon(object):
         print(self.Y + "[i] Checking for SPF records")
         resolves = spfcheck.spflookups(target)
         if(resolves > 10):
-            print(self.R + "[-] SPF record lookup exceeds 10. Current value is: " + str(resolves) + "\n")
+            print(self.R + "[+] SPF record lookup exceeds 10. Current value is: " + str(resolves) + "\n")
+            self.message = "[+] SPF record lookup for " + target + " exceeds 10. Current value is: " + str(resolves) + "\n"
+            self.slack.notify_slack(self.message)
         else:
             print(self.G + "[+] SPF record lookups is good. Current value is: " + str(resolves) + "\n")
+        return
+
+
+    def dnscheck(self, target):
+        """
+        The function checks the MX, TXT and DMARC records and calculate a hash.
+        Hash is compared against a previous computed hash
+        """
+
+        for record in ['MX', 'TXT', 'DMARC']:
+            if record == "MX":
+                data = dns.resolver.query(target, record)
+                flag = False
+                for result in data:
+                    exchange = str(result.exchange)
+                    if 'google.com' not in exchange and 'googlemail.com' not in exchange and 'amazonaws.com' not in exchange:
+                        flag = True
+
+                if flag:
+                    self.slack.notify_slack("[+] %s record of %s has been changed. ```%s```" % (record, target, str(data.response)))
+
+            if record == "TXT":
+                data = dns.resolver.query(target, 'TXT')
+                flag = ""
+                for result in data:
+                    flag += str(result).strip('"')
+
+                if len(flag) != self.config['dns'][target]['TXT_LEN']:
+                    self.slack.notify_slack("[+] %s record of %s has been changed. ```%s```" % (record, target, str(data.response)))
+
+            if record == "DMARC":
+                domain = "_dmarc." + target
+                data = dns.resolver.query(domain, 'TXT')
+                if len(data) > 1 or hashlib.sha1(str(data[0]).strip('"')).hexdigest() != self.config['dns'][target]['DMARC']:
+                    self.slack.notify_slack("[+] %s record of %s has been changed. ```%s```" % (record, target, str(data.response)))
+
         return
 
 
@@ -257,6 +305,28 @@ class Recon(object):
         """
         print(self.Y + "[i] Scraper Results" + self.G)
         self.scraper.run_scrape(target)
+        return
+
+    def firebase_scan(self):
+        """
+        Check for exposed firebase data based on config.
+        """
+        exposed_list = []
+        if len(self.config['firebase']['url']) > 0:
+            for url in self.config['firebase']['url']:
+                req = requests.get(url + "/.json")
+                response = json.loads(req.text)
+                if req.status_code == 404:
+                    continue
+                if req.status_code != 401 or response['error'] != 'Permission denied':
+                    exposed_list.append(url)
+
+        if len(exposed_list) > 0:
+            self.message = "[+] Misconfigured Firebase: \n```"
+            for url in exposed_list:
+                self.message += url + "/.json"
+            self.slack.notify_slack(self.message + "```")
+
         return
 
 
@@ -281,7 +351,7 @@ class Scan():
 
         # Slack notification
         self.slack = Slack()
-        
+
 
     def nessus_scan(self, target, filename):
         """ This function will take care of nessus scans and getting its output"""
@@ -374,8 +444,9 @@ def main():
     
     # Initialising argument parser
     parser = argparse.ArgumentParser(description='Red Team Arsenal')
-    parser.add_argument('-u', '--url', type=str, help='URL to scan')
+    parser.add_argument('-u', '--url', nargs='+', help='URL to scan')
     parser.add_argument('-v', '--verbose', action='store_true', help='enter verbose mode')
+    parser.add_argument('-f', '--firebase', action='store_true', help='Initiate the Firebase Scan based on config')
     parser.add_argument('-n', '--nessus', action='store_true', help='Run Nessus scan')
     parser.add_argument('-s', '--scraper', action='store_true', help='Run scraper based on config keywords')
     args = parser.parse_args()
@@ -389,21 +460,26 @@ def main():
     recon = Recon()
     scan = Scan()
 
-    if args.url:
-        recon.zonetransfer(args.url)
-        recon.spfcheck(args.url)
+    if args.firebase:
+        recon.firebase_scan()
+
+    for url in args.url:
+        recon.zonetransfer(url)
+        recon.spfcheck(url)
+        recon.dnscheck(url)
+
 
         if args.verbose:
-            recon.sublister(args.url, False)
+            recon.sublister(url, False)
         else:
-            recon.sublister(args.url)
+            recon.sublister(url)
 
-        recon.verify(args.url)
-        recon.wappalyzer(args.url, args.verbose)
+        # recon.verify(url)
+        # recon.wappalyzer(url, args.verbose)
         # scan.wp_scan(args.url)
         
         if args.scraper:
-            recon.scrape(args.url)
+            recon.scrape(url)
 
         if args.nessus:
             filename = "Nessus_report_" + str(datetime.now()).split('.')[0]

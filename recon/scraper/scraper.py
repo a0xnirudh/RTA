@@ -39,7 +39,7 @@ class Scraper():
         # Config parser
         path = os.path.dirname(os.path.abspath(__file__))
         with open(path + "/../../config", "r") as ymlfile:
-            config = yaml.load(ymlfile)
+            config = yaml.load(ymlfile, Loader=yaml.FullLoader)
 
         # Github config
         self.github_token = config['scraper']['github_token']

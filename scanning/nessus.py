@@ -32,7 +32,7 @@ class Nessus():
 
         path = os.path.dirname(os.path.abspath(__file__))
         with open(path + "/../config", "r") as ymlfile:
-            config = yaml.load(ymlfile)
+            config = yaml.load(ymlfile, Loader=yaml.FullLoader)
         
         self.nessus_url = config['nessus']['url']
         self.username = config['nessus']['username']

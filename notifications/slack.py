@@ -12,7 +12,7 @@ class Slack():
     def __init__(self):
         path = os.path.dirname(os.path.abspath(__file__))
         with open(path + "/../config", "r") as ymlfile:
-            config = yaml.load(ymlfile)
+            config = yaml.load(ymlfile, Loader=yaml.FullLoader)
 
         try:
             self.slack_url = config['slack']['url']
